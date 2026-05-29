@@ -36,9 +36,8 @@ ai-assistant-eval/
 ## Live Demo
 
 **OSS Assistant (HuggingFace Spaces):**
-https://huggingface.co/spaces/YOUR_USERNAME/oss-assistant-qwen25
+https://huggingface.co/spaces/Likhitha2805/oss-assistant-qwen25
 
-*(Deploy steps below — replace YOUR_USERNAME)*
 
 ---
 
