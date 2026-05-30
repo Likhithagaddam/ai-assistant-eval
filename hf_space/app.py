@@ -1,13 +1,6 @@
 """
-OSS Assistant — Qwen2.5-0.5B-Instruct
-Deployed on Hugging Face Spaces
-
-Features:
-- Multi-turn conversation with persistent memory
-- Guardrails / safety layer
-- Tool use (calculator, date, web search stub)
-- Observability (logging all turns to JSONL)
-- Cost + latency tracking per request
+OSS Assistant - Qwen2.5-0.5B-Instruct
+HuggingFace Spaces — Gradio 4.44.0 (pinned)
 """
 
 import gradio as gr
@@ -29,7 +22,7 @@ print("Loading model...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_ID,
-    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+    dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
     device_map="auto" if torch.cuda.is_available() else None,
 )
 model.eval()
@@ -37,7 +30,7 @@ device = next(model.parameters()).device
 print(f"Model loaded on: {device}")
 
 # ─────────────────────────────────────────
-# 2. GUARDRAILS — blocked patterns
+# 2. GUARDRAILS
 # ─────────────────────────────────────────
 BLOCKED_PATTERNS = [
     r"(how to|steps to|make|build|create|synthesize).{0,30}(bomb|explosive|weapon|meth|cocaine|heroin|malware|virus|ransomware)",
@@ -46,9 +39,7 @@ BLOCKED_PATTERNS = [
     r"(child|minor|underage).{0,20}(sex|naked|nude|porn)",
     r"(step.by.step|instructions).{0,30}(kill|murder|attack|assault)",
 ]
-
 BLOCKED_COMPILED = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
-
 SAFE_RESPONSE = (
     "I'm not able to help with that request. "
     "I'm designed to be a helpful, harmless assistant. "
@@ -62,7 +53,6 @@ def is_blocked(text: str) -> bool:
 # 3. TOOL USE
 # ─────────────────────────────────────────
 def tool_calculator(expr: str) -> str:
-    """Safe eval for math expressions."""
     try:
         allowed = set("0123456789+-*/().% ")
         if not all(c in allowed for c in expr):
@@ -72,13 +62,11 @@ def tool_calculator(expr: str) -> str:
     except Exception as e:
         return f"Error: {e}"
 
-def tool_datetime() -> str:
+def tool_datetime(_: str = "") -> str:
     return datetime.now().strftime("%A, %B %d %Y, %H:%M:%S")
 
 def tool_word_count(text: str) -> str:
-    words = len(text.split())
-    chars = len(text)
-    return f"{words} words, {chars} characters"
+    return f"{len(text.split())} words, {len(text)} characters"
 
 TOOLS = {
     "calculator": tool_calculator,
@@ -87,31 +75,26 @@ TOOLS = {
 }
 
 TOOL_DESCRIPTIONS = """You have access to these tools. Call them by including in your response:
-[TOOL: calculator | <math expression>]   → evaluates math, e.g. [TOOL: calculator | 23 * 47]
-[TOOL: datetime | ]                       → returns current date and time
-[TOOL: word_count | <some text>]          → counts words in text
-
-Use tools when the user asks for calculations, current time/date, or word counts.
-After calling a tool, use its result to answer the user."""
+[TOOL: calculator | <math expression>]   e.g. [TOOL: calculator | 23 * 47]
+[TOOL: datetime | ]                       returns current date and time
+[TOOL: word_count | <some text>]          counts words in text
+Use tools when asked for calculations, current time/date, or word counts."""
 
 def run_tools(response: str) -> str:
-    """Find and execute any tool calls in the model response."""
     pattern = re.compile(r'\[TOOL:\s*(\w+)\s*\|\s*(.*?)\]', re.IGNORECASE)
     def replace_tool(match):
-        tool_name = match.group(1).lower().strip()
-        tool_arg  = match.group(2).strip()
-        if tool_name in TOOLS:
-            fn = TOOLS[tool_name]
+        name = match.group(1).lower().strip()
+        arg  = match.group(2).strip()
+        if name in TOOLS:
             try:
-                result = fn(tool_arg) if tool_arg else fn()
-                return f"[Result: {result}]"
+                return f"[Result: {TOOLS[name](arg)}]"
             except Exception as e:
                 return f"[Tool error: {e}]"
         return match.group(0)
     return pattern.sub(replace_tool, response)
 
 # ─────────────────────────────────────────
-# 4. MEMORY — persistent per session
+# 4. MEMORY
 # ─────────────────────────────────────────
 MEMORY_FILE = "memory_store.json"
 
@@ -120,7 +103,7 @@ def load_memory() -> dict:
         try:
             with open(MEMORY_FILE) as f:
                 return json.load(f)
-        except:
+        except Exception:
             pass
     return {}
 
@@ -128,28 +111,28 @@ def save_memory(store: dict):
     with open(MEMORY_FILE, "w") as f:
         json.dump(store, f, indent=2)
 
-def extract_memory_facts(user_msg: str, bot_msg: str) -> list:
-    """Simple rule-based memory extraction."""
+def extract_memory_facts(user_msg: str) -> list:
     facts = []
-    name_match = re.search(r"my name is (\w+)", user_msg, re.IGNORECASE)
-    if name_match:
-        facts.append(f"User's name is {name_match.group(1)}")
-    lang_match = re.search(r"i (work in|use|code in|program in) (\w+)", user_msg, re.IGNORECASE)
-    if lang_match:
-        facts.append(f"User works with {lang_match.group(2)}")
-    job_match = re.search(r"i(\'m| am) a[n]? ([\w\s]+)(developer|engineer|designer|student|researcher)", user_msg, re.IGNORECASE)
-    if job_match:
-        facts.append(f"User is a {job_match.group(2)}{job_match.group(3)}")
+    m = re.search(r"my name is (\w+)", user_msg, re.IGNORECASE)
+    if m:
+        facts.append(f"User's name is {m.group(1)}")
+    m = re.search(r"i (work in|use|code in|program in) (\w+)", user_msg, re.IGNORECASE)
+    if m:
+        facts.append(f"User works with {m.group(2)}")
+    m = re.search(r"i('m| am) a[n]? ([\w ]+)(developer|engineer|designer|student|researcher)", user_msg, re.IGNORECASE)
+    if m:
+        facts.append(f"User is a {m.group(2)}{m.group(3)}")
     return facts
 
+memory_store = load_memory()
+
 # ─────────────────────────────────────────
-# 5. OBSERVABILITY — log every turn
+# 5. OBSERVABILITY
 # ─────────────────────────────────────────
 LOG_FILE = "obs_log.jsonl"
 
-def log_turn(session_id: str, user_msg: str, bot_msg: str,
-             latency_ms: float, tokens_in: int, tokens_out: int,
-             blocked: bool, tools_used: list):
+def log_turn(session_id, user_msg, bot_msg, latency_ms,
+             tokens_in, tokens_out, blocked, tools_used):
     entry = {
         "ts": datetime.utcnow().isoformat(),
         "session": session_id,
@@ -160,7 +143,7 @@ def log_turn(session_id: str, user_msg: str, bot_msg: str,
         "tokens_out": tokens_out,
         "blocked": blocked,
         "tools_used": tools_used,
-        "cost_usd": 0.0,  # OSS = free; placeholder for comparison
+        "cost_usd": 0.0,
     }
     with open(LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -173,14 +156,12 @@ Answer clearly and concisely.
 
 {TOOL_DESCRIPTIONS}"""
 
-def generate(messages: list, max_new_tokens=512) -> tuple[str, int, int]:
-    """Returns (response_text, tokens_in, tokens_out)."""
+def generate(messages: list, max_new_tokens: int = 512):
     text = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
     inputs = tokenizer([text], return_tensors="pt").to(device)
     tokens_in = inputs.input_ids.shape[1]
-
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -196,12 +177,14 @@ def generate(messages: list, max_new_tokens=512) -> tuple[str, int, int]:
     return response, tokens_in, tokens_out
 
 # ─────────────────────────────────────────
-# 7. MAIN CHAT FUNCTION
+# 7. CHAT FUNCTION
+# Gradio 4.44: history = list of [user_str, bot_str] tuples
 # ─────────────────────────────────────────
-memory_store = load_memory()
+SESSION_ID = f"session_{int(time.time())}"
 
-def chat(message: str, history: list, session_id: str):
+def chat(message, history):
     # Guardrail: check input
+    session_id = SESSION_ID
     if is_blocked(message):
         log_turn(session_id, message, SAFE_RESPONSE, 0, 0, 0, blocked=True, tools_used=[])
         return SAFE_RESPONSE
@@ -216,11 +199,21 @@ def chat(message: str, history: list, session_id: str):
     messages = [{"role": "system", "content": system}]
 
     # Add last 10 turns
-    for u, b in history[-10:]:
-        messages.append({"role": "user", "content": u})
-        if b:
-            messages.append({"role": "assistant", "content": b})
-    messages.append({"role": "user", "content": message})
+    # Add chat history
+
+    if history:
+        for msg in history:
+            if isinstance(msg, dict):
+                role = msg.get("role")
+                content = msg.get("content")
+
+                if role and content:
+                    messages.append(
+                    {
+                        "role": role,
+                        "content": content
+                    }
+                    )
 
     # Generate
     t0 = time.time()
@@ -236,7 +229,7 @@ def chat(message: str, history: list, session_id: str):
         response = SAFE_RESPONSE
 
     # Extract and save memory facts
-    new_facts = extract_memory_facts(message, response)
+    new_facts = extract_memory_facts(message)
     if new_facts:
         if session_id not in memory_store:
             memory_store[session_id] = []
@@ -248,51 +241,24 @@ def chat(message: str, history: list, session_id: str):
              blocked=False, tools_used=tools_used)
 
     return response
-
-def chat_wrapper(message, history, session_id):
-    if not session_id:
-        session_id = f"session_{int(time.time())}"
-    response = chat(message, history, session_id)
-    return response
-
 # ─────────────────────────────────────────
-# 8. GRADIO UI
+# 8. GRADIO UI — pinned to 4.44.0
 # ─────────────────────────────────────────
-with gr.Blocks(theme=gr.themes.Soft(), title="OSS Assistant") as demo:
-    gr.Markdown("""
-    # 🤗 OSS Assistant — Qwen2.5-0.5B-Instruct
-    **Features:** Multi-turn memory · Tool use · Guardrails · Observability
-
-    **Try:** `What is 234 * 567?` · `What time is it?` · `My name is Alex`
-    """)
-
-    session_id = gr.State(value=f"session_{int(time.time())}")
-
-    chatbot = gr.Chatbot(height=450, bubble_full_width=False)
-    msg = gr.Textbox(placeholder="Type your message...", show_label=False, scale=4)
-
-    with gr.Row():
-        submit_btn = gr.Button("Send", variant="primary", scale=1)
-        clear_btn  = gr.Button("Clear", scale=1)
-
-    gr.Examples(
-        examples=[
-            "What is 1337 * 42?",
-            "What is today's date and time?",
-            "My name is Alex and I'm a software engineer",
-            "Explain what a transformer model is in 3 sentences",
-            "Write a haiku about coding",
-        ],
-        inputs=msg
-    )
-
-    def respond(message, chat_history, sid):
-        bot_response = chat_wrapper(message, chat_history, sid)
-        chat_history = chat_history + [[message, bot_response]]
-        return "", chat_history
-
-    msg.submit(respond, [msg, chatbot, session_id], [msg, chatbot])
-    submit_btn.click(respond, [msg, chatbot, session_id], [msg, chatbot])
-    clear_btn.click(lambda: [], outputs=chatbot)
+demo = gr.ChatInterface(
+    fn=chat,
+    title="OSS Assistant - Qwen2.5-0.5B-Instruct",
+    description=(
+        "**Features:** Multi-turn memory | Tool use | Guardrails | Observability\n\n"
+        "**Try:** What is 234 * 567? | What time is it? | My name is Alex"
+    ),
+    examples=[
+        "What is 1337 * 42?",
+        "What is today's date and time?",
+        "My name is Alex and I am a software engineer",
+        "Explain what a transformer model is in 3 sentences",
+        "Write a haiku about coding",
+    ],
+    cache_examples=False,
+)
 
 demo.launch()
